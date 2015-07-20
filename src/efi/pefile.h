@@ -14,8 +14,8 @@
  * Copyright (C) 2015 Kay Sievers <kay@vrfy.org>
  */
 
-#ifndef __GUMMIBOOT_PEFILE_H
-#define __GUMMIBOOT_PEFILE_H
+#ifndef __SDBOOT_PEFILE_H
+#define __SDBOOT_PEFILE_H
 
 EFI_STATUS pefile_locate_sections(EFI_FILE *dir, CHAR16 *path,
                                   CHAR8 **sections, UINTN *addrs, UINTN *offsets, UINTN *sizes);
