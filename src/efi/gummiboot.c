@@ -1,13 +1,6 @@
 /*-*- Mode: C; c-basic-offset: 8; indent-tabs-mode: nil -*-*/
 
 /*
- * Simple UEFI boot loader which executes configured EFI images, where the
- * default entry is selected by a configured pattern (glob) or an on-screen
- * menu.
- *
- * All gummiboot code is LGPL not GPL, to stay out of politics and to give
- * the freedom of copying code from programs to possible future libraries.
- *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2.1 of the License, or
@@ -18,11 +11,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * Lesser General Public License for more details.
  *
- * Copyright (C) 2012-2013 Kay Sievers <kay@vrfy.org>
- * Copyright (C) 2012 Harald Hoyer <harald@redhat.com>
- *
- * "Any intelligent fool can make things bigger, more complex, and more violent."
- *   -- Albert Einstein
+ * Copyright (C) 2012-2015 Kay Sievers <kay@vrfy.org>
+ * Copyright (C) 2012-2015 Harald Hoyer <harald@redhat.com>
  */
 
 #include <efi.h>
@@ -38,12 +28,8 @@
 #define EFI_OS_INDICATIONS_BOOT_TO_FW_UI 0x0000000000000001ULL
 #endif
 
-#ifndef EFI_SECURITY_VIOLATION
-#define EFI_SECURITY_VIOLATION      EFIERR(26)
-#endif
-
 /* magic string to find in the binary image */
-static const char __attribute__((used)) magic[] = "#### LoaderInfo: gummiboot " VERSION " ####";
+static const char __attribute__((used)) magic[] = "#### LoaderInfo: systemd-boot " VERSION " ####";
 
 static const EFI_GUID global_guid = EFI_GLOBAL_VARIABLE;
 
@@ -63,7 +49,6 @@ typedef struct {
         enum loader_type type;
         CHAR16 *loader;
         CHAR16 *options;
-        CHAR16 *splash;
         CHAR16 key;
         EFI_STATUS (*call)(VOID);
         BOOLEAN no_autoselect;
@@ -79,11 +64,8 @@ typedef struct {
         UINTN timeout_sec_config;
         INTN timeout_sec_efivar;
         CHAR16 *entry_default_pattern;
-        CHAR16 *splash;
-        EFI_GRAPHICS_OUTPUT_BLT_PIXEL *background;
         CHAR16 *entry_oneshot;
         CHAR16 *options_edit;
-        CHAR16 *entries_auto;
         BOOLEAN no_editor;
 } Config;
 
@@ -371,7 +353,7 @@ static UINTN entry_lookup_key(Config *config, UINTN start, CHAR16 key) {
         return -1;
 }
 
-static VOID print_status(Config *config, EFI_FILE *root_dir, CHAR16 *loaded_image_path) {
+static VOID print_status(Config *config, CHAR16 *loaded_image_path) {
         UINT64 key;
         UINTN i;
         CHAR16 *s;
@@ -379,49 +361,12 @@ static VOID print_status(Config *config, EFI_FILE *root_dir, CHAR16 *loaded_imag
         UINTN x;
         UINTN y;
         UINTN size;
-        EFI_STATUS err;
-        UINTN color = 0;
-        const EFI_GRAPHICS_OUTPUT_BLT_PIXEL *pixel = config->background;
 
         uefi_call_wrapper(ST->ConOut->SetAttribute, 2, ST->ConOut, EFI_LIGHTGRAY|EFI_BACKGROUND_BLACK);
         uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
 
-        /* show splash and wait for key */
-        for (;;) {
-                static const EFI_GRAPHICS_OUTPUT_BLT_PIXEL colors[] = {
-                        { .Red = 0xff, .Green = 0xff, .Blue = 0xff },
-                        { .Red = 0xc0, .Green = 0xc0, .Blue = 0xc0 },
-                        { .Red = 0xff, .Green =    0, .Blue =    0 },
-                        { .Red =    0, .Green = 0xff, .Blue =    0 },
-                        { .Red =    0, .Green =    0, .Blue = 0xff },
-                        { .Red =    0, .Green =    0, .Blue =    0 },
-                };
-
-                err = EFI_NOT_FOUND;
-                if (config->splash)
-                        err = graphics_splash(root_dir, config->splash, pixel);
-                if (EFI_ERROR(err))
-                        err = graphics_splash(root_dir, L"\\EFI\\gummiboot\\splash.bmp", pixel);
-                if (EFI_ERROR(err))
-                        break;
-
-                /* 'b' rotates through background colors */
-                console_key_read(&key, TRUE);
-                if (key == KEYPRESS(0, 0, 'b')) {
-                        pixel = &colors[color++];
-                        if (color == ELEMENTSOF(colors))
-                                color = 0;
-
-                        continue;
-                }
-
-                graphics_mode(FALSE);
-                uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
-                break;
-        }
-
-        Print(L"gummiboot version:      " VERSION "\n");
-        Print(L"gummiboot architecture: " MACHINE_TYPE_NAME "\n");
+        Print(L"systemd-boot version:   " VERSION "\n");
+        Print(L"architecture:           " EFI_MACHINE_TYPE_NAME "\n");
         Print(L"loaded image:           %s\n", loaded_image_path);
         Print(L"UEFI specification:     %d.%02d\n", ST->Hdr.Revision >> 16, ST->Hdr.Revision & 0xffff);
         Print(L"firmware vendor:        %s\n", ST->FirmwareVendor);
@@ -452,13 +397,6 @@ static VOID print_status(Config *config, EFI_FILE *root_dir, CHAR16 *loaded_imag
         Print(L"timeout (config):       %d\n", config->timeout_sec_config);
         if (config->entry_default_pattern)
                 Print(L"default pattern:        '%s'\n", config->entry_default_pattern);
-        if (config->splash)
-                Print(L"splash                  '%s'\n", config->splash);
-        if (config->background)
-                Print(L"background              '#%02x%02x%02x'\n",
-                      config->background->Red,
-                      config->background->Green,
-                      config->background->Blue);
         Print(L"editor:                 %s\n", yes_no(!config->no_editor));
         Print(L"\n");
 
@@ -472,10 +410,6 @@ static VOID print_status(Config *config, EFI_FILE *root_dir, CHAR16 *loaded_imag
                 Print(L"LoaderConfigTimeout:    %d\n", i);
         if (config->entry_oneshot)
                 Print(L"LoaderEntryOneShot:     %s\n", config->entry_oneshot);
-        if (efivar_get(L"LoaderDeviceIdentifier", &s) == EFI_SUCCESS) {
-                Print(L"LoaderDeviceIdentifier: %s\n", s);
-                FreePool(s);
-        }
         if (efivar_get(L"LoaderDevicePartUUID", &s) == EFI_SUCCESS) {
                 Print(L"LoaderDevicePartUUID:   %s\n", s);
                 FreePool(s);
@@ -495,15 +429,6 @@ static VOID print_status(Config *config, EFI_FILE *root_dir, CHAR16 *loaded_imag
                         break;
 
                 entry = config->entries[i];
-
-                if (entry->splash) {
-                        err = graphics_splash(root_dir, entry->splash, config->background);
-                        if (!EFI_ERROR(err)) {
-                                console_key_read(&key, TRUE);
-                                graphics_mode(FALSE);
-                        }
-                }
-
                 Print(L"config entry:           %d/%d\n", i+1, config->entry_count);
                 if (entry->file)
                         Print(L"file                    '%s'\n", entry->file);
@@ -529,8 +454,6 @@ static VOID print_status(Config *config, EFI_FILE *root_dir, CHAR16 *loaded_imag
                         Print(L"loader                  '%s'\n", entry->loader);
                 if (entry->options)
                         Print(L"options                 '%s'\n", entry->options);
-                if (entry->splash)
-                        Print(L"splash                  '%s'\n", entry->splash);
                 Print(L"auto-select             %s\n", yes_no(!entry->no_autoselect));
                 if (entry->call)
                         Print(L"internal call           yes\n");
@@ -542,7 +465,7 @@ static VOID print_status(Config *config, EFI_FILE *root_dir, CHAR16 *loaded_imag
         uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
 }
 
-static BOOLEAN menu_run(Config *config, ConfigEntry **chosen_entry, EFI_FILE *root_dir, CHAR16 *loaded_image_path) {
+static BOOLEAN menu_run(Config *config, ConfigEntry **chosen_entry, CHAR16 *loaded_image_path) {
         EFI_STATUS err;
         UINTN visible_max;
         UINTN idx_highlight;
@@ -860,13 +783,13 @@ static BOOLEAN menu_run(Config *config, ConfigEntry **chosen_entry, EFI_FILE *ro
                         break;
 
                 case KEYPRESS(0, 0, 'v'):
-                        status = PoolPrint(L"gummiboot " VERSION " (" MACHINE_TYPE_NAME "), UEFI Specification %d.%02d, Vendor %s %d.%02d",
+                        status = PoolPrint(L"systemd-boot " VERSION " (" EFI_MACHINE_TYPE_NAME "), UEFI Specification %d.%02d, Vendor %s %d.%02d",
                                            ST->Hdr.Revision >> 16, ST->Hdr.Revision & 0xffff,
                                            ST->FirmwareVendor, ST->FirmwareRevision >> 16, ST->FirmwareRevision & 0xffff);
                         break;
 
                 case KEYPRESS(0, 0, 'P'):
-                        print_status(config, root_dir, loaded_image_path);
+                        print_status(config, loaded_image_path);
                         refresh = TRUE;
                         break;
 
@@ -888,14 +811,11 @@ static BOOLEAN menu_run(Config *config, ConfigEntry **chosen_entry, EFI_FILE *ro
                         idx_last = idx_highlight;
                         idx_first = 1 + idx_highlight - visible_max;
                         refresh = TRUE;
-                }
-                if (idx_highlight < idx_first) {
+                } else if (idx_highlight < idx_first) {
                         idx_first = idx_highlight;
                         idx_last = idx_highlight + visible_max-1;
                         refresh = TRUE;
                 }
-
-                idx_last = idx_first + visible_max-1;
 
                 if (!refresh && idx_highlight != idx_highlight_prev)
                         highlight = TRUE;
@@ -1081,41 +1001,6 @@ static VOID config_defaults_load_from_file(Config *config, CHAR8 *content) {
                         continue;
                 }
 
-                if (strcmpa((CHAR8 *)"splash", key) == 0) {
-                        FreePool(config->splash);
-                        config->splash = stra_to_path(value);
-                        continue;
-                }
-
-                if (strcmpa((CHAR8 *)"background", key) == 0) {
-                        CHAR16 c[3];
-
-                        /* accept #RRGGBB hex notation */
-                        if (value[0] != '#')
-                                continue;
-                        if (value[7] != '\0')
-                                continue;
-
-                        FreePool(config->background);
-                        config->background = AllocateZeroPool(sizeof(EFI_GRAPHICS_OUTPUT_BLT_PIXEL));
-                        if (!config->background)
-                                continue;
-
-                        c[0] = value[1];
-                        c[1] = value[2];
-                        c[2] = '\0';
-                        config->background->Red = xtoi(c);
-
-                        c[0] = value[3];
-                        c[1] = value[4];
-                        config->background->Green = xtoi(c);
-
-                        c[0] = value[5];
-                        c[1] = value[6];
-                        config->background->Blue = xtoi(c);
-                        continue;
-                }
-
                 if (strcmpa((CHAR8 *)"editor", key) == 0) {
                         BOOLEAN on;
 
@@ -1178,8 +1063,8 @@ static VOID config_entry_add_from_file(Config *config, EFI_HANDLE *device, CHAR1
                 }
 
                 if (strcmpa((CHAR8 *)"architecture", key) == 0) {
-                        /* do not add an entry for an EFI image of architecture not matching with that of the gummiboot image */
-                        if (strcmpa((CHAR8 *)MACHINE_TYPE_NAME, value) != 0) {
+                        /* do not add an entry for an EFI image of architecture not matching with that of the image */
+                        if (strcmpa((CHAR8 *)EFI_MACHINE_TYPE_NAME, value) != 0) {
                                 entry->type = LOADER_UNDEFINED;
                                 break;
                         }
@@ -1219,12 +1104,6 @@ static VOID config_entry_add_from_file(Config *config, EFI_HANDLE *device, CHAR1
                         FreePool(new);
                         continue;
                 }
-
-                if (strcmpa((CHAR8 *)"splash", key) == 0) {
-                        FreePool(entry->splash);
-                        entry->splash = stra_to_path(value);
-                        continue;
-                }
         }
 
         if (entry->type == LOADER_UNDEFINED) {
@@ -1248,46 +1127,6 @@ static VOID config_entry_add_from_file(Config *config, EFI_HANDLE *device, CHAR1
                 }
         }
         FreePool(initrd);
-
-        if (entry->machine_id) {
-                CHAR16 *var;
-
-                /* append additional options from EFI variables for this machine-id */
-                var = PoolPrint(L"LoaderEntryOptions-%s", entry->machine_id);
-                if (var) {
-                        CHAR16 *s;
-
-                        if (efivar_get(var, &s) == EFI_SUCCESS) {
-                                if (entry->options) {
-                                        CHAR16 *s2;
-
-                                        s2 = PoolPrint(L"%s %s", entry->options, s);
-                                        FreePool(entry->options);
-                                        entry->options = s2;
-                                } else
-                                        entry->options = s;
-                        }
-                        FreePool(var);
-                }
-
-                var = PoolPrint(L"LoaderEntryOptionsOneShot-%s", entry->machine_id);
-                if (var) {
-                        CHAR16 *s;
-
-                        if (efivar_get(var, &s) == EFI_SUCCESS) {
-                                if (entry->options) {
-                                        CHAR16 *s2;
-
-                                        s2 = PoolPrint(L"%s %s", entry->options, s);
-                                        FreePool(entry->options);
-                                        entry->options = s2;
-                                } else
-                                        entry->options = s;
-                                efivar_set(var, NULL, TRUE);
-                        }
-                        FreePool(var);
-                }
-        }
 
         entry->device = device;
         entry->file = StrDuplicate(file);
@@ -1339,10 +1178,13 @@ static VOID config_load(Config *config, EFI_HANDLE *device, EFI_FILE *root_dir, 
                                 continue;
                         if (f->Attribute & EFI_FILE_DIRECTORY)
                                 continue;
+
                         len = StrLen(f->FileName);
                         if (len < 6)
                                 continue;
                         if (StriCmp(f->FileName + len - 5, L".conf") != 0)
+                                continue;
+                        if (StrnCmp(f->FileName, L"auto-", 5) == 0)
                                 continue;
 
                         len = file_read(entries_dir, f->FileName, 0, 0, &content);
@@ -1620,19 +1462,6 @@ static BOOLEAN config_entry_add_loader_auto(Config *config, EFI_HANDLE *device, 
         /* do not boot right away into auto-detected entries */
         entry->no_autoselect = TRUE;
 
-        /* do not show a splash; they do not need one, or they draw their own */
-        entry->splash = StrDuplicate(L"");
-
-        /* export identifiers of automatically added entries */
-        if (config->entries_auto) {
-                CHAR16 *s;
-
-                s = PoolPrint(L"%s %s", config->entries_auto, file);
-                FreePool(config->entries_auto);
-                config->entries_auto = s;
-        } else
-                config->entries_auto = StrDuplicate(file);
-
         return TRUE;
 }
 
@@ -1834,9 +1663,6 @@ static VOID config_free(Config *config) {
         FreePool(config->entry_default_pattern);
         FreePool(config->options_edit);
         FreePool(config->entry_oneshot);
-        FreePool(config->entries_auto);
-        FreePool(config->splash);
-        FreePool(config->background);
 }
 
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *sys_table) {
@@ -1855,7 +1681,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *sys_table) {
         InitializeLib(image, sys_table);
         init_usec = time_usec();
         efivar_set_time_usec(L"LoaderTimeInitUSec", init_usec);
-        efivar_set(L"LoaderInfo", L"gummiboot " VERSION, FALSE);
+        efivar_set(L"LoaderInfo", L"systemd-boot " VERSION, FALSE);
         s = PoolPrint(L"%s %d.%02d", ST->FirmwareVendor, ST->FirmwareRevision >> 16, ST->FirmwareRevision & 0xffff);
         efivar_set(L"LoaderFirmwareInfo", s, FALSE);
         FreePool(s);
@@ -1874,12 +1700,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *sys_table) {
         /* export the device path this image is started from */
         device_path = DevicePathFromHandle(loaded_image->DeviceHandle);
         if (device_path) {
-                CHAR16 *str;
                 EFI_DEVICE_PATH *path, *paths;
-
-                str = DevicePathToStr(device_path);
-                efivar_set(L"LoaderDeviceIdentifier", str, FALSE);
-                FreePool(str);
 
                 paths = UnpackDevicePath(device_path);
                 for (path = paths; !IsDevicePathEnd(path); path = NextDevicePathNode(path)) {
@@ -1917,25 +1738,15 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *sys_table) {
         ZeroMem(&config, sizeof(Config));
         config_load(&config, loaded_image->DeviceHandle, root_dir, loaded_image_path);
 
-        if (!config.background) {
-                config.background = AllocateZeroPool(sizeof(EFI_GRAPHICS_OUTPUT_BLT_PIXEL));
-                if (StriCmp(L"Apple", ST->FirmwareVendor) == 0) {
-                        config.background->Red = 0xc0;
-                        config.background->Green = 0xc0;
-                        config.background->Blue = 0xc0;
-                }
-        }
-
         /* if we find some well-known loaders, add them to the end of the list */
         config_entry_add_linux(&config, loaded_image, root_dir);
         config_entry_add_loader_auto(&config, loaded_image->DeviceHandle, root_dir, loaded_image_path,
                                      L"auto-windows", 'w', L"Windows Boot Manager", L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi");
         config_entry_add_loader_auto(&config, loaded_image->DeviceHandle, root_dir, loaded_image_path,
-                                     L"auto-efi-shell", 's', L"EFI Shell", L"\\shell" MACHINE_TYPE_NAME ".efi");
+                                     L"auto-efi-shell", 's', L"EFI Shell", L"\\shell" EFI_MACHINE_TYPE_NAME ".efi");
         config_entry_add_loader_auto(&config, loaded_image->DeviceHandle, root_dir, loaded_image_path,
-                                     L"auto-efi-default", '\0', L"EFI Default Loader", L"\\EFI\\Boot\\boot" MACHINE_TYPE_NAME ".efi");
+                                     L"auto-efi-default", '\0', L"EFI Default Loader", L"\\EFI\\Boot\\boot" EFI_MACHINE_TYPE_NAME ".efi");
         config_entry_add_osx(&config);
-        efivar_set(L"LoaderEntriesAuto", config.entries_auto, FALSE);
 
         if (efivar_get_raw(&global_guid, L"OsIndicationsSupported", &b, &size) == EFI_SUCCESS) {
                 UINT64 osind = (UINT64)*b;
@@ -1988,7 +1799,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *sys_table) {
                 if (menu) {
                         efivar_set_time_usec(L"LoaderTimeMenuUSec", 0);
                         uefi_call_wrapper(BS->SetWatchdogTimer, 4, 0, 0x10000, 0, NULL);
-                        if (!menu_run(&config, &entry, root_dir, loaded_image_path))
+                        if (!menu_run(&config, &entry, loaded_image_path))
                                 break;
 
                         /* run special entry like "reboot" */
@@ -1996,25 +1807,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *sys_table) {
                                 entry->call();
                                 continue;
                         }
-                } else {
-                        err = EFI_NOT_FOUND;
-
-                        /* splash from entry file */
-                        if (entry->splash) {
-                                /* some entries disable the splash because they draw their own */
-                                if (entry->splash[0] == '\0')
-                                        err = EFI_SUCCESS;
-                                else
-                                        err = graphics_splash(root_dir, entry->splash, config.background);
-                        }
-
-                        /* splash from config file */
-                        if (EFI_ERROR(err) && config.splash)
-                                err = graphics_splash(root_dir, config.splash, config.background);
-
-                        /* default splash */
-                        if (EFI_ERROR(err))
-                                graphics_splash(root_dir, L"\\EFI\\gummiboot\\splash.bmp", config.background);
                 }
 
                 /* export the selected boot entry to the system */
@@ -2022,14 +1814,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *sys_table) {
 
                 uefi_call_wrapper(BS->SetWatchdogTimer, 4, 5 * 60, 0x10000, 0, NULL);
                 err = image_start(image, &config, entry);
-
-                if (err == EFI_ACCESS_DENIED || err == EFI_SECURITY_VIOLATION) {
-                        /* Platform is secure boot and requested image isn't
-                         * trusted. Need to go back to prior boot system and
-                         * install more keys or hashes. Signal failure by
-                         * returning the error */
-                        Print(L"\nImage %s gives a security error\n", entry->title);
-                        Print(L"Please enrol the hash or signature of %s\n", entry->loader);
+                if (EFI_ERROR(err)) {
+                        graphics_mode(FALSE);
+                        Print(L"\nFailed to execute %s (%s): %r\n", entry->title, entry->loader, err);
                         uefi_call_wrapper(BS->Stall, 1, 3 * 1000 * 1000);
                         goto out;
                 }
