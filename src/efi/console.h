@@ -15,8 +15,8 @@
  * Copyright (C) 2012 Harald Hoyer <harald@redhat.com>
  */
 
-#ifndef __GUMMIBOOT_CONSOLE_H
-#define __GUMMIBOOT_CONSOLE_H
+#ifndef __SDBOOT_CONSOLE_H
+#define __SDBOOT_CONSOLE_H
 
 #define EFI_SHIFT_STATE_VALID           0x80000000
 #define EFI_RIGHT_CONTROL_PRESSED       0x00000004
