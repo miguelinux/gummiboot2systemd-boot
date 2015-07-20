@@ -15,8 +15,8 @@
  * Copyright (C) 2012 Harald Hoyer <harald@redhat.com>
  */
 
-#ifndef __GUMMIBOOT_UTIL_H
-#define __GUMMIBOOT_UTIL_H
+#ifndef __SDBOOT_UTIL_H
+#define __SDBOOT_UTIL_H
 
 #include <efi.h>
 #include <efilib.h>
